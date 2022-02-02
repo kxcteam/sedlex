@@ -4,7 +4,7 @@
 
 type regexp
 
-type node_action = [`save_offset of string]
+type node_action = string * [`save_offset of string]
 
 val set_pre_action: node_action -> regexp -> regexp
 val set_post_action: node_action -> regexp -> regexp

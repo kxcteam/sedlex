@@ -12,7 +12,7 @@ type node = {
   mutable eps : node list;
   mutable trans : (Cset.t * node) list;
 }
-and node_action = [`save_offset of string]
+and node_action = string * [`save_offset of string]
 
 (* Compilation regexp -> NFA *)
 
