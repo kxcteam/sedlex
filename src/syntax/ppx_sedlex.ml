@@ -175,6 +175,8 @@ let partition (name, p) =
       [%e body]
     ]
 
+(* Alias offset *)
+
 (* Code generation for the automata *)
 
 let best_final final =
@@ -196,8 +198,8 @@ let call_state lexbuf auto state =
 
 let gen_state lexbuf auto i (trans, final) =
   let loc = default_loc in
-  let partition = Array.map fst trans in
-  let cases = Array.mapi (fun i (_, j) -> case ~lhs:(pint ~loc i) ~guard:None ~rhs:(call_state lexbuf auto j)) trans in
+  let partition = Array.map (fun (c, _, _) -> c) trans in
+  let cases = Array.mapi (fun i (_, j, _) -> case ~lhs:(pint ~loc i) ~guard:None ~rhs:(call_state lexbuf auto j)) trans in
   let cases = Array.to_list cases in
   let body () =
     pexp_match ~loc
@@ -210,6 +212,12 @@ let gen_state lexbuf auto i (trans, final) =
     | Some _ when Array.length trans = 0 -> []
     | Some i -> ret [%expr Sedlexing.mark [%e evar ~loc lexbuf] [%e eint ~loc i]; [%e body ()]]
 
+let gen_alias lexbuf _auto _i _e =
+  let loc = default_loc in
+  [value_binding ~loc
+     ~pat:(ppat_tuple ~loc [ppat_any ~loc; pvar ~loc "dummy"])
+     ~expr:[%expr Sedlexing.loc [%e evar ~loc lexbuf]]]
+
 let gen_recflag auto =
   (* The generated function is not recursive if the transitions end
      in states with no further transitions. *)
@@ -217,7 +225,7 @@ let gen_recflag auto =
     Array.iter
       (fun (trans_i, _) ->
         Array.iter
-          (fun (_, j) ->
+          (fun (_, j, _) ->
             let (trans_j, _) = auto.(j) in
             if Array.length trans_j > 0 then raise Exit)
           trans_i)
@@ -230,7 +238,15 @@ let gen_definition lexbuf l error =
   let loc = default_loc in
   let brs = Array.of_list l in
   let auto = Sedlex.compile (Array.map fst brs) in
-  let cases = Array.to_list (Array.mapi (fun i (_, e) -> case ~lhs:(pint ~loc i) ~guard:None ~rhs:e) brs) in
+  (* auto = [|([|(c11, i11, a11); ...; (c1m, i1m, a1m)|],
+   *           [|b11; ...; b1n|]);
+   *          ...;
+   *          ([|(cm1, im1, am1); ...; (cmm, imm, amm)|],
+   *           [|bm1; ...; bmn|])|]
+   *    where ``n'' is the number of regexp and ``m'' is the number of compiled DFA states *)
+  let aliases : value_binding list array = Array.mapi (fun i br -> (gen_alias lexbuf auto i (snd br))) brs in
+  let _aliases : value_binding list = List.flatten (Array.to_list aliases) in
+  let cases = Array.to_list (Array.mapi (fun i (_, e) -> case ~lhs:(pint ~loc i) ~guard:None ~rhs:(e)) brs) in
   let states = Array.mapi (gen_state lexbuf auto) auto in
   let states = List.flatten (Array.to_list states) in
   pexp_let ~loc (gen_recflag auto) states
@@ -353,11 +369,16 @@ let regexp_of_pattern env =
         with Not_found ->
           err p.ppat_loc (Printf.sprintf "unbound regexp %s" x)
         end
+    | Ppat_alias (pat, {txt=label}) ->
+       let begin_offset_slot_var = "__"^label^"_begin_offset" in
+       let end_offset_slot_var = "__"^label^"_end_offset" in
+       aux pat
+       |> Sedlex.set_post_action (label, `save_offset end_offset_slot_var)
+       |> Sedlex.set_pre_action (label, `save_offset begin_offset_slot_var)
     | _ ->
-      err p.ppat_loc "this pattern is not a valid regexp"
+       err p.ppat_loc "this pattern is not a valid regexp"
   in
   aux
-
 
 let previous = ref []
 let regexps = ref []
