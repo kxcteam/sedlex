@@ -3,9 +3,18 @@
 (* Copyright 2005, 2013 by Alain Frisch and LexiFi.                       *)
 
 type regexp
+and named_slots = {
+  begin_var: string;
+  end_var: string;
+}
 
-type node_action = string * [`save_offset of string]
+type node_action = [`save_offset of save_offset_action]
+and save_offset_action = {
+  orig : string;
+  slot : string;
+}
 
+val get_slots: string -> regexp -> string * string
 val set_pre_action: node_action -> regexp -> regexp
 val set_post_action: node_action -> regexp -> regexp
 

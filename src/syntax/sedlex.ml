@@ -4,6 +4,11 @@
 
 module Cset = Sedlex_cset
 
+module StringMap = Map.Make(struct
+  type t = string
+  let compare = compare
+end)
+
 (* NFA *)
 
 type node = {
@@ -12,62 +17,86 @@ type node = {
   mutable eps : node list;
   mutable trans : (Cset.t * node) list;
 }
-and node_action = string * [`save_offset of string]
+and node_action = [`save_offset of save_offset_action]
+and save_offset_action = {
+  orig : string;
+  slot : string;
+}
 
 (* Compilation regexp -> NFA *)
 
-type regexp = node -> node
+type regexp = {
+  nfa : node -> node;
+  named_groups : named_slots StringMap.t;
+}
+and named_slots = {
+  begin_var : string;
+  end_var : string;
+}
 
-let set_pre_action act re succ =
-  let init = re succ in
-  init.action <- act :: init.action;
-  init
+let get_slots name re =
+  let slots = StringMap.find name re.named_groups in
+  (slots.begin_var, slots.end_var)
 
-let set_post_action act re succ =
-  succ.action <- act :: succ.action;
-  re succ
+let set_pre_action act re =
+  {re with
+   nfa = (fun succ ->
+       let init = re.nfa succ in
+       init.action <- act :: init.action;
+       init)}
+
+let set_post_action act re =
+  {re with
+   nfa = (fun succ ->
+       succ.action <- act :: succ.action;
+       re.nfa succ)}
 
 let cur_id = ref 0
 let new_node () =
   incr cur_id;
   { id = !cur_id; action = []; eps = []; trans = [] }
 
-let seq r1 r2 succ = r1 (r2 succ)
+let regexp_of_nfa nfa =
+  {nfa = nfa;
+   named_groups = StringMap.empty;}
+
+let seq r1 r2 =
+  regexp_of_nfa (fun succ -> r1.nfa (r2.nfa succ))
 
 let is_chars final = function
   | {eps = []; trans = [c, f]} when f == final -> Some c
   | _ -> None
 
-let chars c succ =
-  let n = new_node () in
-  n.trans <- [c,succ];
-  n
-
-let alt r1 r2 succ =
-  let nr1 = r1 succ and nr2 = r2 succ in
-  match is_chars succ nr1, is_chars succ nr2 with
-  | Some c1, Some c2 -> chars (Cset.union c1 c2) succ
-  | _ ->
+let chars c = regexp_of_nfa (fun succ ->
     let n = new_node () in
-    n.eps <- [r1 succ; r2 succ];
-    n
+    n.trans <- [c,succ];
+    n)
 
-let rep r succ =
-  let n = new_node () in
-  n.eps <- [r n; succ];
-  n
+let alt r1 r2 = regexp_of_nfa (fun succ ->
+    let nr1 = r1.nfa succ and nr2 = r2.nfa succ in
+    match is_chars succ nr1, is_chars succ nr2 with
+    | Some c1, Some c2 -> (chars (Cset.union c1 c2)).nfa succ
+    | _ ->
+      let n = new_node () in
+      n.eps <- [r1.nfa succ; r2.nfa succ];
+      n)
 
-let plus r succ =
-  let n = new_node () in
-  let nr = r n in
-  n.eps <- [nr; succ];
-  nr
+let rep r = regexp_of_nfa (fun succ ->
+    let n = new_node () in
+    n.eps <- [r.nfa n; succ];
+    n)
 
-let eps succ = succ (* eps for epsilon *)
+let plus r = regexp_of_nfa (fun succ ->
+    let n = new_node () in
+    let nr = r.nfa n in
+    n.eps <- [nr; succ];
+    nr)
+
+let eps = regexp_of_nfa (fun succ -> succ) (* eps for epsilon *)
 
 let compl r =
   let n = new_node () in
-  match is_chars n (r n) with
+  match is_chars n (r.nfa n) with
   | Some c ->
     Some (chars (Cset.difference Cset.any c))
   | _ ->
@@ -75,7 +104,7 @@ let compl r =
 
 let pair_op f r0 r1 = (* Construct subtract or intersection *)
   let n = new_node () in
-  let to_chars r = is_chars n (r n) in
+  let to_chars r = is_chars n (r.nfa n) in
   match to_chars r0, to_chars r1 with
   | Some c0, Some c1 ->
     Some (chars (f c0 c1))
@@ -88,7 +117,7 @@ let intersection = pair_op Cset.intersection
 
 let compile_re re =
   let final = new_node () in
-  (re final, final)
+  (re.nfa final, final)
 
 (* Determinization *)
 
