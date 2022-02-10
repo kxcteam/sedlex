@@ -187,29 +187,71 @@ let best_final final =
   done;
   !fin
 
+let gen_alisas_slots auto =
+  let loc = default_loc in
+  let module S = Set.Make(struct type t = string let compare = compare end) in
+  let slots = ref [] in
+  let seen = ref S.empty in
+  Array.iter (fun (_, _, acts) -> List.iter (function
+      | (`save_offset slot) ->
+        if S.mem slot !seen then ()
+        else slots := slot :: !slots; seen := S.add slot !seen
+      | _ -> assert false) acts) auto;
+  List.map (fun slot -> value_binding ~loc ~pat:(pvar ~loc slot) ~expr:[%expr ref (-1)]) !slots
+
+let gen_aliases lexbuf re =
+  let loc = default_loc in
+  List.map (fun name ->
+      let begin_slot, end_slot = Sedlex.get_slots name re in
+      value_binding ~loc
+        ~pat:(pvar ~loc name)
+        ~expr:(
+(*
+          pexp_sequence ~loc
+            [%expr print_endline
+                ("Sedlexing.sub_lexeme lexbuf "
+                 ^string_of_int (! [%e evar ~loc begin_slot])^" "
+                 ^string_of_int ((! [%e evar ~loc end_slot]) - (! [%e evar ~loc begin_slot])))]
+*)
+            [%expr Sedlexing.sub_lexeme
+                [%e evar ~loc lexbuf]
+                (! [%e evar ~loc begin_slot])
+                ((! [%e evar ~loc end_slot]) - (! [%e evar ~loc begin_slot]))]))
+    (Sedlex.get_names re)
+
 let state_fun state = Printf.sprintf "__sedlex_state_%i" state
 
 let call_state lexbuf auto state =
-  let (trans, final) = auto.(state) in
-  (*
-  let (_, _, acts) = trans in
-  let acts = List.map (fun (label, `save_offset offset)) acts
-     *)
+  let (trans, final, _) = auto.(state) in
   if Array.length trans = 0
   then match best_final final with
   | Some i -> eint ~loc:default_loc i
   | None -> assert false
   else appfun (state_fun state) [evar ~loc:default_loc lexbuf]
 
-let gen_state lexbuf auto i (trans, final) =
+let gen_state lexbuf auto i (trans, final, actions) =
   let loc = default_loc in
-  let partition = Array.map (fun (c, _, _) -> c) trans in
-  let cases = Array.mapi (fun i (_, j, _) -> case ~lhs:(pint ~loc i) ~guard:None ~rhs:(call_state lexbuf auto j)) trans in
+  let partition = Array.map fst trans in
+  let actions = List.map (function
+      | `save_offset act ->
+(*
+          pexp_sequence ~loc
+            [%expr
+              print_string [%e estring ~loc (act^" := ")];
+              print_int (snd (Sedlexing.loc [%e evar ~loc lexbuf]));
+              print_newline ();]
+*)
+            [%expr [%e evar ~loc act] := (snd (Sedlexing.loc [%e evar ~loc lexbuf]))]
+      | _ -> assert false) actions in
+  let cases = Array.mapi (fun i (_, j) ->
+      case ~lhs:(pint ~loc i) ~guard:None ~rhs:(call_state lexbuf auto j)) trans in
   let cases = Array.to_list cases in
   let body () =
-    pexp_match ~loc
-      (appfun (partition_name partition) [[%expr Sedlexing.__private__next_int [%e evar ~loc lexbuf]]])
-      (cases @ [case ~lhs:[%pat? _] ~guard:None ~rhs:[%expr Sedlexing.backtrack [%e evar ~loc lexbuf]]])
+    esequence ~loc
+      (actions @
+       [pexp_match ~loc
+          (appfun (partition_name partition) [[%expr Sedlexing.__private__next_int [%e evar ~loc lexbuf]]])
+          (cases @ [case ~lhs:[%pat? _] ~guard:None ~rhs:[%expr Sedlexing.backtrack [%e evar ~loc lexbuf]]])])
   in
   let ret body = [ value_binding ~loc ~pat:(pvar ~loc (state_fun i)) ~expr:(pexp_function ~loc [case ~lhs:(pvar ~loc lexbuf) ~guard:None ~rhs:body]) ] in
   match best_final final with
@@ -217,24 +259,15 @@ let gen_state lexbuf auto i (trans, final) =
     | Some _ when Array.length trans = 0 -> []
     | Some i -> ret [%expr Sedlexing.mark [%e evar ~loc lexbuf] [%e eint ~loc i]; [%e body ()]]
 
-let gen_alias lexbuf _auto i =
-  let loc = default_loc in
-  [value_binding ~loc
-     ~pat:(pvar ~loc ("branch_"^string_of_int i^"_dummy"))
-     ~expr:[%expr Sedlexing.sub_lexeme
-         (! [%e evar ~loc "dummy_start_offset"])
-         (! [%e evar ~loc "dummy_end_offset"])
-         [%e evar ~loc lexbuf]]]
-
 let gen_recflag auto =
   (* The generated function is not recursive if the transitions end
      in states with no further transitions. *)
   try
     Array.iter
-      (fun (trans_i, _) ->
+      (fun (trans_i, _, _) ->
         Array.iter
-          (fun (_, j, _) ->
-            let (trans_j, _) = auto.(j) in
+          (fun (_, j) ->
+            let (trans_j, _, _) = auto.(j) in
             if Array.length trans_j > 0 then raise Exit)
           trans_i)
       auto;
@@ -246,28 +279,26 @@ let gen_definition lexbuf l error =
   let loc = default_loc in
   let brs = Array.of_list l in
   let auto = Sedlex.compile (Array.map fst brs) in
-  (* auto = [|([|(c11, i11, a11); ...; (c1m, i1m, a1m)|],
-   *           [|b11; ...; b1n|]);
-   *          ...;
-   *          ([|(cm1, im1, am1); ...; (cmm, imm, amm)|],
-   *           [|bm1; ...; bmn|])|]
-   *    where ``n'' is the number of regexp and ``m'' is the number of compiled DFA states *)
-  (*
-  let alias_slots = Array.map (fun (trans, _) -> List.concat_map (fun (_, _, a) -> a) (Array.to_list trans)) auto in
-  let alias_slots = List.flatten (Array.to_list alias_slots) in
-  let aliases : value_binding list array = Array.mapi (fun i _ -> (gen_alias lexbuf auto i)) brs in
-  let _aliases : value_binding list = List.flatten (Array.to_list aliases) in
-     *)
-  let cases = Array.to_list (Array.mapi (fun i (_, e) -> case ~lhs:(pint ~loc i) ~guard:None ~rhs:(e)) brs) in
+  let alias_slots = gen_alisas_slots auto in
+  let aliases = Array.map (fun (re, _) -> gen_aliases lexbuf re) brs in
+  let cases = Array.to_list (Array.mapi (fun i (_, e) ->
+      let expression = match aliases.(i) with
+        | [] -> e
+        | aliases -> pexp_let ~loc Nonrecursive aliases e in
+      case ~lhs:(pint ~loc i) ~guard:None ~rhs:expression) brs) in
   let states = Array.mapi (gen_state lexbuf auto) auto in
   let states = List.flatten (Array.to_list states) in
-  pexp_let ~loc (gen_recflag auto) states
-    (pexp_sequence ~loc
-       [%expr Sedlexing.start [%e evar ~loc lexbuf]]
-       (pexp_match ~loc (appfun (state_fun 0) [evar ~loc lexbuf])
-          (cases @ [case ~lhs:(ppat_any ~loc) ~guard:None ~rhs:error])
-       )
-    )
+  let body () =
+    pexp_let ~loc (gen_recflag auto) states
+      (pexp_sequence ~loc
+         [%expr Sedlexing.start [%e evar ~loc lexbuf]]
+         (pexp_match ~loc (appfun (state_fun 0) [evar ~loc lexbuf])
+            (cases @ [case ~lhs:(ppat_any ~loc) ~guard:None ~rhs:error])
+         )
+      ) in
+  match alias_slots with
+  | [] -> body ()
+  | _ -> pexp_let ~loc Nonrecursive alias_slots (body ())
 
 (* Lexer specification parser *)
 
@@ -383,11 +414,12 @@ let regexp_of_pattern env =
         end
     | Ppat_alias (pat, {txt=var}) ->
        incr offset_counter;
-       let begin_offset_slot_var = string_of_int !offset_counter^"__"^var^"_begin_offset" in
-       let end_offset_slot_var = string_of_int !offset_counter^"__"^var^"_end_offset" in
+       let begin_offset_slot_var = "__sedlex_"^var^"_begin_offset_"^(string_of_int !offset_counter) in
+       let end_offset_slot_var = "__sedlex_"^var^"_end_offset_"^(string_of_int !offset_counter) in
        aux pat
-       |> Sedlex.set_post_action (`save_offset {orig=var; slot=end_offset_slot_var})
-       |> Sedlex.set_pre_action (`save_offset {orig=var; slot=begin_offset_slot_var})
+       |> Sedlex.set_slots var (begin_offset_slot_var, end_offset_slot_var)
+       |> Sedlex.set_post_action (`save_offset end_offset_slot_var)
+       |> Sedlex.set_pre_action (`save_offset begin_offset_slot_var)
     | _ ->
        err p.ppat_loc "this pattern is not a valid regexp"
   in

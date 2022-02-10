@@ -3,18 +3,12 @@
 (* Copyright 2005, 2013 by Alain Frisch and LexiFi.                       *)
 
 type regexp
-and named_slots = {
-  begin_var: string;
-  end_var: string;
-}
 
-type node_action = [`save_offset of save_offset_action]
-and save_offset_action = {
-  orig : string;
-  slot : string;
-}
+type node_action = [`save_offset of string]
 
+val get_names: regexp -> string list
 val get_slots: string -> regexp -> string * string
+val set_slots: string -> string * string -> regexp -> regexp
 val set_pre_action: node_action -> regexp -> regexp
 val set_post_action: node_action -> regexp -> regexp
 
@@ -35,4 +29,4 @@ val intersection: regexp -> regexp -> regexp option
    (* If each argument is a single [chars] regexp, returns a regexp
       which matches the intersection set.  Otherwise returns [None]. *)
 
-val compile: regexp array -> ((Sedlex_cset.t * int * node_action list) array * bool array) array
+val compile: regexp array -> ((Sedlex_cset.t * int) array * bool array * node_action list) array
