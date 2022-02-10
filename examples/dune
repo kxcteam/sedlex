@@ -1,5 +1,5 @@
 (executables
- (names tokenizer regressions complement subtraction repeat performance)
+ (names tokenizer regressions complement subtraction repeat as_pattern performance)
  (libraries sedlex sedlex_ppx)
  (preprocess
   (pps sedlex.ppx))
@@ -37,6 +37,13 @@
  (alias runtest)
  (deps
   (:< repeat.exe))
+ (action
+  (run %{<})))
+
+(rule
+ (alias runtest)
+ (deps
+  (:< as_pattern.exe))
  (action
   (run %{<})))
 
