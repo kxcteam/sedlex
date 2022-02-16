@@ -2,7 +2,7 @@ let rec token buf =
   match%sedlex buf with
   | eof -> print_endline "\tEnd"
   | white_space -> print_endline "\tWhitespace"; token buf
-  | ((Plus ('a' .. 'z' | 'A' .. 'Z')) as text, white_space) ->
+  | ((Plus ('a' .. 'z' | 'A' .. 'Z')) as text, (Star (white_space | ',' | '.'))) ->
      print_string "as-pattern text:\t";
      print_endline (String.of_seq (Array.to_seq (Array.map Uchar.to_char text)));
      token buf

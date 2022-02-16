@@ -222,10 +222,22 @@ let gen_aliases lexbuf re =
 let state_fun state = Printf.sprintf "__sedlex_state_%i" state
 
 let call_state lexbuf auto state =
-  let (trans, final, _) = auto.(state) in
+  let loc = default_loc in
+  let (trans, final, actions) = auto.(state) in
+  let actions = List.map (function
+      | `save_offset act ->
+(*
+          pexp_sequence ~loc
+            [%expr
+              print_string [%e estring ~loc (act^" := ")];
+              print_int (snd (Sedlexing.loc [%e evar ~loc lexbuf]));
+              print_newline ();]
+*)
+            [%expr [%e evar ~loc act] := (snd (Sedlexing.loc [%e evar ~loc lexbuf]))]
+      | _ -> assert false) actions in
   if Array.length trans = 0
   then match best_final final with
-  | Some i -> eint ~loc:default_loc i
+  | Some i -> esequence ~loc (actions @ [eint ~loc i])
   | None -> assert false
   else appfun (state_fun state) [evar ~loc:default_loc lexbuf]
 
