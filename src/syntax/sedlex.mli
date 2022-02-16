@@ -4,7 +4,15 @@
 
 type regexp
 
-type node_action = [`save_offset of string]
+type node_action = [`save_offset of save_offset_action]
+and save_offset_action =
+  | Save_offset_assign of {
+      varname : string;
+    }
+  | Save_offset_update of {
+      varname : string;
+      update_function : prev:(int option) -> curr:int -> int option
+    }
 
 val get_names: regexp -> string list
 val get_slots: string -> regexp -> string * string
