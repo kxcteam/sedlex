@@ -175,8 +175,8 @@ let partition (name, p) =
       [%e body]
     ]
 
-(* Alias offset *)
-let offset_counter = ref (-1)
+(* Alias offset slot counter *)
+let alias_slot_counter = ref (-1)
 
 (* Code generation for the automata *)
 
@@ -198,9 +198,9 @@ let gen_alisas_slots auto =
         else slots := slot :: !slots; seen := S.add slot !seen
       | _ -> assert false) acts) auto;
   List.map (function
-      | Sedlex.(Save_offset_assign {varname=var}) ->
+      | Sedlex.Save_begin_offset_assign var ->
          value_binding ~loc ~pat:(pvar ~loc var) ~expr:[%expr ref None]
-      | Sedlex.(Save_offset_update {varname=var}) ->
+      | Sedlex.Save_end_offset_assign var ->
          value_binding ~loc ~pat:(pvar ~loc var) ~expr:[%expr ref None]) !slots
 
 let gen_aliases lexbuf re =
@@ -213,61 +213,58 @@ let gen_aliases lexbuf re =
 (*
           pexp_sequence ~loc
             [%expr print_endline
-                ("Sedlexing.sub_lexeme lexbuf "
-                 ^string_of_int (! [%e evar ~loc begin_slot])^" "
-                 ^string_of_int ((! [%e evar ~loc end_slot]) - (! [%e evar ~loc begin_slot])))]
+                ("Sedlexing.sub_lexeme "^[%e estring ~loc lexbuf]^" "
+                 ^"("^string_of_int (Option.get (! [%e evar ~loc begin_slot]))^" - "
+                 ^string_of_int (Option.get (! [%e evar ~loc begin_slot]))^") "
+                 ^"("^string_of_int (Option.get (! [%e evar ~loc end_slot]))^" - "
+                 ^string_of_int (Option.get (! [%e evar ~loc begin_slot]))^")")]
 *)
-            [%expr Sedlexing.sub_lexeme
-                [%e evar ~loc lexbuf]
-                (Option.get (! [%e evar ~loc begin_slot]))
+            [%expr Sedlexing.sub_lexeme [%e evar ~loc lexbuf]
+                ((Option.get (! [%e evar ~loc begin_slot])) - fst (Sedlexing.loc [%e evar ~loc lexbuf]))
                 ((Option.get (! [%e evar ~loc end_slot])) - (Option.get (! [%e evar ~loc begin_slot])))]))
     (Sedlex.get_names re)
 
 let state_fun state = Printf.sprintf "__sedlex_state_%i" state
 
+let eaction ~loc lexbuf = function
+  | `save_offset Sedlex.Save_begin_offset_assign var ->
+(*
+     pexp_sequence ~loc 
+       [%expr
+         print_endline ([%e estring ~loc var]^" := "^(match (! [%e evar ~loc var]) with
+         | None -> "Some "^string_of_int (snd (Sedlexing.loc [%e evar ~loc lexbuf]))
+         | Some _ -> "Some "^string_of_int (min (snd (Sedlexing.loc [%e evar ~loc lexbuf])) (Option.get (! [%e evar ~loc var])))))]
+*)
+     [%expr [%e evar ~loc var] := match (! [%e evar ~loc var]) with
+         | None -> Some (snd (Sedlexing.loc [%e evar ~loc lexbuf]))
+         | Some _ -> Some (min (snd (Sedlexing.loc [%e evar ~loc lexbuf])) (Option.get (! [%e evar ~loc var])))]
+  | `save_offset Sedlex.Save_end_offset_assign var ->
+(*
+     pexp_sequence ~loc 
+       [%expr
+         print_endline ([%e estring ~loc var]^" := "^(match (! [%e evar ~loc var]) with
+         | None -> "Some "^string_of_int (snd (Sedlexing.loc [%e evar ~loc lexbuf]))
+         | Some _ -> "Some "^string_of_int (max (snd (Sedlexing.loc [%e evar ~loc lexbuf])) (Option.get (! [%e evar ~loc var])))))]
+*)
+     [%expr [%e evar ~loc var] := match (! [%e evar ~loc var]) with
+         | None -> Some (snd (Sedlexing.loc [%e evar ~loc lexbuf]))
+         | Some _ -> Some (max (snd (Sedlexing.loc [%e evar ~loc lexbuf])) (Option.get (! [%e evar ~loc var]) ))]
+  | _ -> assert false
+
 let call_state lexbuf auto state =
   let loc = default_loc in
   let (trans, final, actions) = auto.(state) in
-  let actions = List.map (function
-      | `save_offset Sedlex.(Save_offset_assign {varname=var}) ->
-(*
-          pexp_sequence ~loc
-            [%expr
-              print_string [%e estring ~loc (act^" := ")];
-              print_int (snd (Sedlexing.loc [%e evar ~loc lexbuf]));
-              print_newline ();]
-*)
-            [%expr [%e evar ~loc var] := (Some (snd (Sedlexing.loc [%e evar ~loc lexbuf])))]
-      | _ -> assert false) actions in
+  let actions = List.map (eaction ~loc lexbuf) actions in
   if Array.length trans = 0
   then match best_final final with
-  | Some i -> esequence ~loc (actions @ [eint ~loc:default_loc i])
+  | Some i -> esequence ~loc (actions @ [eint ~loc i])
   | None -> assert false
   else appfun (state_fun state) [evar ~loc lexbuf]
 
 let gen_state lexbuf auto i (trans, final, actions) =
   let loc = default_loc in
   let partition = Array.map fst trans in
-  let actions = List.map (function
-      | `save_offset Sedlex.(Save_offset_assign {varname=var}) ->
-(*
-          pexp_sequence ~loc
-            [%expr
-              print_string [%e estring ~loc (act^" := ")];
-              print_int (snd (Sedlexing.loc [%e evar ~loc lexbuf]));
-              print_newline ();]
-*)
-            [%expr [%e evar ~loc var] := (Some (snd (Sedlexing.loc [%e evar ~loc lexbuf])))]
-(*
-      | `save_offset Sedlex.(Save_offset_update {varname=var; update_function=f}) ->
-          pexp_sequence ~loc
-            [%expr
-              print_string [%e estring ~loc (act^" := ")];
-              print_int (snd (Sedlexing.loc [%e evar ~loc lexbuf]));
-              print_newline ();]
-            [%expr [%e evar ~loc var] := (f (! [%e evar ~loc var]) (snd (Sedlexing.loc [%e evar ~loc lexbuf])))]
-*)
-      | _ -> assert false) actions in
+  let actions = List.map (eaction ~loc lexbuf) actions in
   let cases = Array.mapi (fun i (_, j) ->
       case ~lhs:(pint ~loc i) ~guard:None ~rhs:(call_state lexbuf auto j)) trans in
   let cases = Array.to_list cases in
@@ -438,13 +435,13 @@ let regexp_of_pattern env =
           err p.ppat_loc (Printf.sprintf "unbound regexp %s" x)
         end
     | Ppat_alias (pat, {txt=var}) ->
-       incr offset_counter;
-       let begin_offset_slot_var = "__sedlex_"^var^"_begin_offset_"^(string_of_int !offset_counter) in
-       let end_offset_slot_var = "__sedlex_"^var^"_end_offset_"^(string_of_int !offset_counter) in
+       incr alias_slot_counter;
+       let begin_offset_slot_var = "__sedlex_"^var^"_begin_offset_"^(string_of_int !alias_slot_counter) in
+       let end_offset_slot_var = "__sedlex_"^var^"_end_offset_"^(string_of_int !alias_slot_counter) in
        aux pat
        |> Sedlex.set_slots var (begin_offset_slot_var, end_offset_slot_var)
-       |> Sedlex.set_post_action (`save_offset Sedlex.(Save_offset_assign {varname=end_offset_slot_var}))
-       |> Sedlex.set_pre_action (`save_offset Sedlex.(Save_offset_assign {varname=begin_offset_slot_var}))
+       |> Sedlex.set_post_action (`save_offset (Sedlex.Save_end_offset_assign end_offset_slot_var))
+       |> Sedlex.set_pre_action (`save_offset (Sedlex.Save_begin_offset_assign begin_offset_slot_var))
     | _ ->
        err p.ppat_loc "this pattern is not a valid regexp"
   in
