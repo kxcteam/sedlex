@@ -251,22 +251,31 @@ let eaction ~loc lexbuf = function
          | Some _ -> Some (max (snd (Sedlexing.loc [%e evar ~loc lexbuf])) (Option.get (! [%e evar ~loc var]) ))]
   | _ -> assert false
 
-let call_state lexbuf auto state =
+let reorder_transition_actions : Sedlex.generic_action list -> Sedlex.generic_action list
+  = fun acts -> acts            (* XXX *)
+
+let call_state lexbuf auto state trans_acts =
   let loc = default_loc in
-  let (trans, final, actions) = auto.(state) in
-  let actions = List.map (eaction ~loc lexbuf) actions in
+  let (trans, final, node_acts) = auto.(state) in
+  let acts : Sedlex.generic_action list =
+    (trans_acts :> Sedlex.generic_action list)
+    @ (node_acts :> Sedlex.generic_action list) in
+  let acts =
+    acts
+    |> reorder_transition_actions
+    |> List.map (eaction ~loc lexbuf) in
   if Array.length trans = 0
   then match best_final final with
-  | Some i -> esequence ~loc (actions @ [eint ~loc i])
+  | Some i -> esequence ~loc (acts @ [eint ~loc i])
   | None -> assert false
   else appfun (state_fun state) [evar ~loc lexbuf]
 
 let gen_state lexbuf auto i (trans, final, actions) =
   let loc = default_loc in
-  let partition = Array.map fst trans in
+  let partition = Array.map (fun (f,_,_) -> f) trans in
   let actions = List.map (eaction ~loc lexbuf) actions in
-  let cases = Array.mapi (fun i (_, j) ->
-      case ~lhs:(pint ~loc i) ~guard:None ~rhs:(call_state lexbuf auto j)) trans in
+  let cases = Array.mapi (fun i (_, j, acts) ->
+      case ~lhs:(pint ~loc i) ~guard:None ~rhs:(call_state lexbuf auto j acts)) trans in
   let cases = Array.to_list cases in
   let body () =
     esequence ~loc
@@ -288,7 +297,7 @@ let gen_recflag auto =
     Array.iter
       (fun (trans_i, _, _) ->
         Array.iter
-          (fun (_, j) ->
+          (fun (_, j, _) ->
             let (trans_j, _, _) = auto.(j) in
             if Array.length trans_j > 0 then raise Exit)
           trans_i)

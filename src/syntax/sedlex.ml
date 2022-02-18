@@ -15,12 +15,14 @@ type node = {
   id : int;
   mutable action : node_action list;
   mutable eps : node list;
-  mutable trans : (Cset.t * node) list;
+  mutable trans : (Cset.t * node * transition_action list) list;
 }
 and node_action = [`save_offset of save_offset_action]
+and transition_action = [`step_capture_slot of string]
 and save_offset_action =
   | Save_begin_offset_assign of string
   | Save_end_offset_assign of string
+type generic_action = [ transition_action | node_action ]
 
 (* Compilation regexp -> NFA *)
 
@@ -77,12 +79,12 @@ let seq r1 r2 =
    named_groups = merge_named_groups r1.named_groups r2.named_groups;}
 
 let is_chars final = function
-  | {eps = []; trans = [c, f]} when f == final -> Some c
+  | {eps = []; trans = [c, f, _]} when f == final -> Some c
   | _ -> None
 
 let chars c = regexp_of_nfa (fun succ ->
     let n = new_node () in
-    n.trans <- [c,succ];
+    n.trans <- [c,succ,[]];
     n)
 
 let alt r1 r2 =
@@ -150,36 +152,35 @@ let rec add_node state node =
 and add_nodes state nodes =
   List.fold_left add_node state nodes
 
-
 let transition (state : state) =
   (* Merge transition with the same target *)
   let rec norm = function
-    | (c1, n1)::((c2, n2)::q as l) ->
-      if n1 == n2 then norm ((Cset.union c1 c2, n1)::q)
-      else (c1, n1)::(norm l)
+    | (c1, n1, acts1)::((c2, n2, acts2)::q as l) ->
+      if n1 == n2 then norm ((Cset.union c1 c2, n1, acts1@acts2)::q)
+      else (c1, n1, acts1)::(norm l)
     | l -> l in
   let t = List.concat (List.map (fun n -> n.trans) state) in
-  let t = norm (List.sort (fun (_, n1) (_, n2) -> n1.id - n2.id) t) in
+  let t = norm (List.sort (fun (_, n1, _) (_, n2, _) -> n1.id - n2.id) t) in
 
   (* Split char sets so as to make them disjoint *)
-  let split (all, t) (c0, n0) =
+  let split (all, t) (c0, n0, acts0) =
     let t =
-      (Cset.difference c0 all, [n0]) ::
-      List.map (fun (c, ns) -> (Cset.intersection c c0, n0::ns)) t @
-      List.map (fun (c, ns) -> (Cset.difference c c0, ns)) t
+      (Cset.difference c0 all, [n0], acts0) ::
+      List.map (fun (c, ns, acts) -> (Cset.intersection c c0, n0::ns, acts0@acts)) t @
+      List.map (fun (c, ns, acts) -> (Cset.difference c c0, ns, acts)) t
     in
     Cset.union all c0,
-    List.filter (fun (c, _) -> not (Cset.is_empty c)) t
+    List.filter (fun (c, _, _) -> not (Cset.is_empty c)) t
   in
 
   let (_,t) = List.fold_left split (Cset.empty,[]) t in
 
   (* Epsilon closure of targets *)
-  let t = List.map (fun (c, ns) -> (c, add_nodes [] ns)) t in
+  let t = List.map (fun (c, ns, acts) -> (c, add_nodes [] ns, acts)) t in
 
   (* Canonical ordering *)
   let t = Array.of_list t in
-  Array.sort (fun (c1, _) (c2, _) -> compare c1 c2) t;
+  Array.sort (fun (c1, _, _) (c2, _, _) -> compare c1 c2) t;
   t
 
 let compile rs =
@@ -196,7 +197,7 @@ let compile rs =
       let trans = transition state in
       let trans =
         Array.map
-          (fun (p, t) -> (p, aux t))
+          (fun (p, t, acts) -> (p, aux t, acts))
           trans in
       let finals = Array.map (fun (_, f) -> List.memq f state) rs in
       let actions = List.concat_map (fun n -> n.action) state in

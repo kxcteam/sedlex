@@ -4,10 +4,12 @@
 
 type regexp
 
+type transition_action = [`step_capture_slot of string]
 type node_action = [`save_offset of save_offset_action]
 and save_offset_action =
   | Save_begin_offset_assign of string
   | Save_end_offset_assign of string
+type generic_action = [ transition_action | node_action ]
 
 val get_names: regexp -> string list
 val get_slots: string -> regexp -> string * string
@@ -32,4 +34,6 @@ val intersection: regexp -> regexp -> regexp option
    (* If each argument is a single [chars] regexp, returns a regexp
       which matches the intersection set.  Otherwise returns [None]. *)
 
-val compile: regexp array -> ((Sedlex_cset.t * int) array * bool array * node_action list) array
+val compile:
+  regexp array ->
+  ((Sedlex_cset.t * int * transition_action list) array * bool array * node_action list) array
