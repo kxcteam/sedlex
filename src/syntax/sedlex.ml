@@ -17,7 +17,11 @@ type node = {
   mutable eps : node list;
   mutable trans : (Cset.t * node * transition_action list) list;
 }
-and node_action = [`save_offset of save_offset_action]
+and node_action = [
+  | `save_offset of save_offset_action
+  | `may_init_capture_slot of string
+  | `may_finish_capture_slot of string
+  ]
 and transition_action = [`step_capture_slot of string]
 and save_offset_action =
   | Save_begin_offset_assign of string
@@ -44,6 +48,7 @@ let get_slots name re =
 let set_slots name (begin_slot, end_slot) re =
   {re with named_groups = StringMap.add name {begin_var=begin_slot; end_var=end_slot;} re.named_groups}
 
+(* XXX : consider name changing - set_ => add_ *)
 let set_pre_action act re =
   {re with
    nfa = (fun succ ->
@@ -56,6 +61,35 @@ let set_post_action act re =
    nfa = (fun succ ->
        succ.action <- act :: succ.action;
        re.nfa succ)}
+
+module NodeSet = Set.Make(struct
+                     type t = node
+                     let compare a b = compare a.id b.id
+                   end)
+
+let iter_all_nodes func init =
+  let visited = ref NodeSet.empty in
+  let rec aux n =
+    if not (NodeSet.mem n !visited) then (
+      func n; visited := NodeSet.add n !visited;
+      List.iter aux n.eps;
+      List.iter (fun (_, n, _) -> aux n) n.trans
+    ) in
+  aux init
+
+let add_transition_action_to_all_internal_transitions act re : regexp =
+  { re with
+    nfa = begin
+      let nfa0 = re.nfa in
+      fun fin ->
+      let sub : node = nfa0 fin in
+      iter_all_nodes (fun node ->
+          node.trans <- 
+            node.trans
+            |> List.map (fun (c, n, acts) -> c, n, act::acts)) sub;
+      sub
+    end
+  }
 
 let cur_id = ref 0
 let new_node () =

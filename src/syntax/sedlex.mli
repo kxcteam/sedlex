@@ -5,7 +5,11 @@
 type regexp
 
 type transition_action = [`step_capture_slot of string]
-type node_action = [`save_offset of save_offset_action]
+type node_action = [
+  | `save_offset of save_offset_action
+  | `may_init_capture_slot of string
+  | `may_finish_capture_slot of string
+  ]
 and save_offset_action =
   | Save_begin_offset_assign of string
   | Save_end_offset_assign of string
@@ -16,6 +20,7 @@ val get_slots: string -> regexp -> string * string
 val set_slots: string -> string * string -> regexp -> regexp
 val set_pre_action: node_action -> regexp -> regexp
 val set_post_action: node_action -> regexp -> regexp
+val add_transition_action_to_all_internal_transitions : transition_action -> regexp -> regexp
 
 val chars: Sedlex_cset.t -> regexp
 val seq: regexp -> regexp -> regexp

@@ -445,12 +445,22 @@ let regexp_of_pattern env =
         end
     | Ppat_alias (pat, {txt=var}) ->
        incr alias_slot_counter;
-       let begin_offset_slot_var = "__sedlex_"^var^"_begin_offset_"^(string_of_int !alias_slot_counter) in
-       let end_offset_slot_var = "__sedlex_"^var^"_end_offset_"^(string_of_int !alias_slot_counter) in
+       let capture_slot_var = "__sedlex_"^var^"_capture_slot"^(string_of_int !alias_slot_counter) in
+       (* let begin_offset_slot_var = "__sedlex_"^var^"_begin_offset_"^(string_of_int !alias_slot_counter) in *)
+       (* let end_offset_slot_var = "__sedlex_"^var^"_end_offset_"^(string_of_int !alias_slot_counter) in *)
        aux pat
-       |> Sedlex.set_slots var (begin_offset_slot_var, end_offset_slot_var)
-       |> Sedlex.set_post_action (`save_offset (Sedlex.Save_end_offset_assign end_offset_slot_var))
-       |> Sedlex.set_pre_action (`save_offset (Sedlex.Save_begin_offset_assign begin_offset_slot_var))
+       (* |> Sedlex.set_slots var (begin_offset_slot_var, end_offset_slot_var) *)
+       |> Sedlex.set_slots var (capture_slot_var)
+       |> Sedlex.add_transition_action_to_all_internal_transitions (`step_capture_slot capture_slot_var)
+
+       (* XXX *)
+       |> Sedlex.set_pre_action (`may_init_capture_slot capture_slot_var)
+       |> Sedlex.set_post_action (`may_finish_capture_slot capture_slot_var)
+
+
+       (* |> Sedlex.set_post_action (`save_offset (Sedlex.Save_end_offset_assign end_offset_slot_var)) *)
+       (* |> Sedlex.set_pre_action (`save_offset (Sedlex.Save_begin_offset_assign begin_offset_slot_var)) *)
+
     | _ ->
        err p.ppat_loc "this pattern is not a valid regexp"
   in
